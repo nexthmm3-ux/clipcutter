@@ -1,0 +1,952 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Clip Cutter</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&family=Space+Grotesk:wght@500;700&display=swap" rel="stylesheet">
+<style>
+/* Layout concept: an editing bench. Page 1 is the setup. Page 2 is a work bench with one slot per clip, then a small game below it. */
+:root {
+  --bg: #eceff2;
+  --surface: #ffffff;
+  --fg: #10151c;
+  --muted: #5b6672;
+  --line: #d3d9df;
+  --accent: #d9480f;
+  --accent-fg: #ffffff;
+  --ok: #1b7f4b;
+  --track: #dfe4e9;
+  --err: #b42318;
+  --display: "Space Grotesk", system-ui, sans-serif;
+  --body: "Inter", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --mono: "JetBrains Mono", ui-monospace, Menlo, Consolas, monospace;
+  color-scheme: light;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #0e1217; --surface: #161c23; --fg: #e8ecf0; --muted: #8b96a3;
+    --line: #27313b; --accent: #ff7a3d; --accent-fg: #1a0d05; --ok: #4cc38a;
+    --track: #202a33; --err: #ff8a80; color-scheme: dark;
+  }
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; }
+body { background: var(--bg); color: var(--fg); font: 15px/1.55 var(--body); padding: 28px max(16px, env(safe-area-inset-left, 0px)) 56px; }
+.wrap { max-width: 760px; margin: 0 auto; display: flex; flex-direction: column; gap: 18px; }
+h1 { font: 700 32px/1.1 var(--display); letter-spacing: -0.02em; margin: 0; text-wrap: balance; }
+.sub { color: var(--muted); margin: 8px 0 0; max-width: 60ch; }
+.panel { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 18px; display: flex; flex-direction: column; gap: 14px; min-width: 0; }
+.label { font: 500 11px/1 var(--mono); letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); }
+.drop { border: 1.5px dashed var(--line); border-radius: 8px; padding: 26px 16px; text-align: center; cursor: pointer; transition: border-color .15s, background .15s; display: block; }
+.drop:hover, .drop.over { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 6%, transparent); }
+.drop b { display: block; font: 600 16px var(--display); overflow-wrap: anywhere; }
+.drop span { color: var(--muted); font-size: 13px; }
+.drop input { display: none; }
+.opts { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 14px; }
+.opt { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+select { font: inherit; color: var(--fg); background: var(--bg); border: 1px solid var(--line); border-radius: 6px; padding: 9px 10px; width: 100%; }
+.check { display: flex; align-items: center; gap: 8px; font-size: 14px; }
+button { font: 600 14px var(--body); border-radius: 6px; border: 1px solid transparent; padding: 10px 16px; cursor: pointer; }
+button.primary { background: var(--accent); color: var(--accent-fg); }
+button.ghost { background: transparent; color: var(--fg); border-color: var(--line); }
+button:disabled { opacity: .45; cursor: not-allowed; }
+button:focus-visible, select:focus-visible, .drop:focus-visible, a:focus-visible, canvas:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.note { font-size: 13px; color: var(--muted); }
+.row { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
+.bar { height: 8px; border-radius: 4px; background: var(--track); overflow: hidden; }
+.bar > i { display: block; height: 100%; width: 0; background: var(--accent); transition: width .25s; }
+.stage { font: 500 14px/1.4 var(--mono); overflow-wrap: anywhere; }
+.stat { font: 400 12px var(--mono); color: var(--muted); }
+.err { color: var(--err); font-size: 14px; white-space: pre-wrap; overflow-wrap: anywhere; }
+video#pv { width: 100%; max-height: 60vh; background: #000; border-radius: 8px; }
+
+/* page 2: one slot per clip */
+.slots { display: flex; flex-direction: column; gap: 10px; }
+.slot { display: grid; grid-template-columns: 38px 1fr; gap: 12px; background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 14px; min-width: 0; }
+.slot .n { font: 700 22px var(--display); color: var(--accent); }
+.slot h3 { margin: 0; font: 600 16px var(--display); text-wrap: balance; overflow-wrap: anywhere; }
+.slot .tc { font: 400 12px var(--mono); color: var(--muted); margin: 2px 0 10px; }
+.slot .srow { display: flex; justify-content: space-between; gap: 10px; margin-top: 6px; font: 500 12px var(--mono); }
+.slot .pct { color: var(--fg); font-variant-numeric: tabular-nums; }
+.slot .sstat { color: var(--muted); text-align: right; overflow-wrap: anywhere; }
+.slot.done .bar > i { background: var(--ok); }
+.slot.done .n { color: var(--ok); }
+.slot.failed .n, .slot.failed .sstat { color: var(--err); }
+.slot .acts { margin-top: 10px; }
+.slot .acts a { font: 600 14px var(--body); color: var(--accent-fg); background: var(--ok); border-radius: 6px; padding: 10px 16px; text-decoration: none; }
+.slot .msg { flex-basis: 100%; font-size: 13px; color: var(--err); overflow-wrap: anywhere; }
+
+/* game */
+.game { align-items: center; text-align: center; }
+.game .head { align-self: stretch; display: flex; justify-content: space-between; align-items: baseline; gap: 10px; flex-wrap: wrap; }
+.game h2 { margin: 0; font: 700 18px var(--display); }
+canvas#game { display: block; width: 100%; max-width: 380px; aspect-ratio: 3 / 4; border-radius: 8px; border: 1px solid var(--line); touch-action: manipulation; user-select: none; -webkit-user-select: none; -webkit-tap-highlight-color: transparent; cursor: pointer; }
+.badges { display: flex; flex-wrap: wrap; gap: 6px; justify-content: center; }
+.badge { font: 500 11px var(--mono); border: 1px solid var(--line); border-radius: 999px; padding: 4px 10px; color: var(--muted); opacity: .5; }
+.badge.on { opacity: 1; color: var(--accent-fg); background: var(--accent); border-color: var(--accent); }
+.offscreen { position: fixed; left: -99999px; top: 0; width: 8px; height: 8px; }
+.hidvid { position: fixed; right: 0; bottom: 0; width: 2px; height: 2px; opacity: .01; pointer-events: none; }
+
+.ad { border: 1px dashed var(--line); border-radius: 8px; padding: 12px 14px; font-size: 13px; color: var(--muted); display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+.ad b { font: 500 10px var(--mono); letter-spacing: 0.08em; text-transform: uppercase; border: 1px solid var(--line); border-radius: 3px; padding: 2px 5px; }
+.ad a { color: var(--accent); font-weight: 600; overflow-wrap: anywhere; }
+footer { font-size: 12px; color: var(--muted); }
+[hidden] { display: none !important; }
+@media (max-width: 520px) { .slot { grid-template-columns: 30px 1fr; gap: 10px; } }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>Clip Cutter</h1>
+    <p class="sub">Add an English video. It finds the key moments and cuts 30 or 60 second clips with captions at the bottom. Everything runs in this browser, so the video is never uploaded.</p>
+  </header>
+
+  <!-- AD SLOT (top). Fill PROMO.top in the script below, or paste ad network code inside the div under it. -->
+  <aside class="ad" id="adTop" hidden></aside>
+  <div id="adNetworkTop"></div>
+
+  <!-- PAGE 1: setup -->
+  <section class="panel" id="viewSetup" aria-label="Source and settings">
+    <div class="label">1 · Video</div>
+    <label class="drop" id="drop" tabindex="0">
+      <input type="file" id="file" accept="video/*">
+      <b id="fname">Choose a video file</b>
+      <span id="fmeta">or drop it here. English speech works best.</span>
+    </label>
+    <div class="label">2 · Settings</div>
+    <div class="opts">
+      <div class="opt"><label class="label" for="len">Clip length</label>
+        <select id="len"><option value="30">About 30 seconds</option><option value="60" selected>About 1 minute</option></select></div>
+      <div class="opt"><label class="label" for="count">Number of clips</label>
+        <select id="count"><option>3</option><option selected>5</option><option>8</option><option>10</option><option>15</option></select></div>
+      <div class="opt"><label class="label" for="fmt">Shape</label>
+        <select id="fmt"><option value="orig">Same as video</option><option value="vertical">Vertical 9:16 (centre crop)</option></select></div>
+      <div class="opt"><label class="label" for="model">Speech model</label>
+        <select id="model"><option value="Xenova/whisper-tiny.en">Fast (tiny)</option><option value="Xenova/whisper-base.en">Better (base, slower)</option></select></div>
+    </div>
+    <label class="check"><input type="checkbox" id="caps" checked> Burn captions into the clips</label>
+    <div class="row">
+      <button class="primary" id="go" disabled>Make my clips</button>
+      <span class="note">Keep this tab open with the screen on and the phone plugged in. The first run downloads the speech model once and needs internet.</span>
+    </div>
+  </section>
+
+  <!-- PAGE 2: work bench -->
+  <div id="viewWork" hidden style="display:flex;flex-direction:column;gap:14px">
+    <section class="panel" aria-live="polite">
+      <div class="label" id="stepLabel">Step 1 of 2</div>
+      <div class="stage" id="stageTxt">Starting…</div>
+      <div class="bar"><i id="barFill"></i></div>
+      <div class="stat" id="elapsed"></div>
+      <div class="err" id="errTxt" hidden></div>
+      <div class="row"><button class="ghost" id="back" hidden>Start over</button></div>
+    </section>
+
+    <video id="pv" controls playsinline hidden></video>
+    <div class="slots" id="slots"></div>
+
+    <section class="panel game" aria-label="Game">
+      <div class="head"><h2>Play while you wait</h2><span class="stat" id="gameScore">Level 1 · Score 0 · Best 0</span></div>
+      <canvas id="game" tabindex="0" aria-label="Tap to make the bird fly between the pillars"></canvas>
+      <div class="badges" id="badges" aria-label="Achievements"></div>
+      <span class="note">Tap the game, or press Space, to fly. Every 5 pillars is a new level with a new badge. From score 10, shield and boost orbs appear in the gaps.</span>
+    </section>
+  </div>
+
+  <!-- AD SLOT (bottom) -->
+  <aside class="ad" id="adBottom" hidden></aside>
+  <div id="adNetworkBottom"></div>
+
+  <footer>Built with Transformers.js and OpenAI Whisper. Your video stays on your device.</footer>
+</div>
+<canvas id="stage" class="offscreen" aria-hidden="true"></canvas>
+
+<script type="module">
+const $ = (id) => document.getElementById(id);
+const state = { file: null, duration: 0, segs: [], clips: [], slots: [], busy: false };
+
+/* ---------- YOUR PROMO / AD SETTINGS: edit these two lines ---------- */
+const PROMO = {
+  top:    { text: '', url: '' },   // e.g. { text: 'Try my other app', url: 'https://example.com' }
+  bottom: { text: '', url: '' }
+};
+for (const [k, id] of [['top', 'adTop'], ['bottom', 'adBottom']]) {
+  const p = PROMO[k], el = $(id);
+  if (p.text && p.url) {
+    const tag = document.createElement('b'); tag.textContent = 'Ad';
+    const a = document.createElement('a'); a.href = p.url; a.target = '_blank'; a.rel = 'sponsored noopener'; a.textContent = p.text;
+    el.append(tag, a); el.hidden = false;
+  }
+}
+
+/* ---------- helpers ---------- */
+const fmt = (t) => {
+  t = Math.max(0, Math.round(t));
+  const h = Math.floor(t / 3600), m = Math.floor((t % 3600) / 60), s = t % 60;
+  return (h ? h + ':' + String(m).padStart(2, '0') : m) + ':' + String(s).padStart(2, '0');
+};
+const timeout = (ms, msg) => new Promise((_, rej) => setTimeout(() => rej(new Error(msg)), ms));
+const once = (el, ev) => new Promise((r) => el.addEventListener(ev, r, { once: true }));
+function showErr(e) {
+  console.error(e);
+  $('errTxt').textContent = 'Something went wrong:\n' + (e && e.message ? e.message : e);
+  $('errTxt').hidden = false; $('back').hidden = false;
+}
+window.addEventListener('unhandledrejection', (e) => {
+  const r = e.reason, m = r && r.message ? r.message : '';
+  if ((r && r.name === 'AbortError') || /play\(\)|interrupted/i.test(m)) { e.preventDefault(); return; } // harmless video play/pause clash
+  showErr(r);
+});
+let t0 = 0, tick = null;
+const startTimer = () => { t0 = Date.now(); clearInterval(tick); $('elapsed').textContent = 'Elapsed 0:00'; tick = setInterval(() => { $('elapsed').textContent = 'Elapsed ' + fmt((Date.now() - t0) / 1000); }, 1000); };
+const stopTimer = () => clearInterval(tick);
+const setStage = (txt, pct) => { $('stageTxt').textContent = txt; if (pct != null) $('barFill').style.width = Math.min(100, pct) + '%'; };
+let wl = null, wantAwake = false;
+async function keepAwake(on) {
+  wantAwake = on;
+  try {
+    if (on && !wl && navigator.wakeLock) { wl = await navigator.wakeLock.request('screen'); wl.addEventListener('release', () => { wl = null; }); }
+    else if (!on && wl) { await wl.release(); wl = null; }
+  } catch (e) { /* not available here */ }
+}
+document.addEventListener('visibilitychange', () => { if (wantAwake && document.visibilityState === 'visible') keepAwake(true); });
+
+/* ---------- file selection ---------- */
+let rv = null, rvUrl = null, actx = null, adest = null;
+function chooseFile(f) {
+  if (!f) return;
+  disposeRenderer();
+  state.file = f;
+  $('fname').textContent = f.name;
+  $('fmeta').textContent = (f.size / 1048576).toFixed(0) + ' MB · click to change';
+  // read the length with a short-lived element, then release it so it does not hold memory
+  const u = URL.createObjectURL(f), v = document.createElement('video');
+  v.preload = 'metadata'; v.src = u;
+  v.onloadedmetadata = () => { state.duration = v.duration; $('fmeta').textContent += ' · ' + fmt(v.duration); v.removeAttribute('src'); v.load(); URL.revokeObjectURL(u); };
+  v.onerror = () => { URL.revokeObjectURL(u); };
+  $('go').disabled = false;
+}
+$('file').addEventListener('change', (e) => chooseFile(e.target.files[0]));
+const drop = $('drop');
+['dragover', 'dragenter'].forEach((ev) => drop.addEventListener(ev, (e) => { e.preventDefault(); drop.classList.add('over'); }));
+['dragleave', 'drop'].forEach((ev) => drop.addEventListener(ev, (e) => { e.preventDefault(); drop.classList.remove('over'); }));
+drop.addEventListener('drop', (e) => chooseFile(e.dataTransfer.files[0]));
+drop.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); $('file').click(); } });
+
+/* ---------- audio extraction (16 kHz mono) ---------- */
+async function extractAudio(file) {
+  let buf;
+  try { buf = await file.arrayBuffer(); }
+  catch (e) { throw new Error('This file is too large for the browser to read at once. Try a smaller or compressed version of the video.'); }
+  const ctx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 16000 });
+  let audio;
+  try { audio = await ctx.decodeAudioData(buf); }
+  catch (e) { throw new Error('The browser could not read the sound of this video. Try an MP4 (H.264) file, or a smaller one.'); }
+  buf = null;
+  const ch = audio.numberOfChannels, out = new Float32Array(audio.length);
+  for (let c = 0; c < ch; c++) { const d = audio.getChannelData(c); for (let i = 0; i < d.length; i++) out[i] += d[i] / ch; }
+  ctx.close();
+  return out;
+}
+
+/* ---------- speech to text ----------
+   The heavy listening work runs in a background worker, so the page and the game never freeze.
+   If the browser cannot start a worker, the same code runs on the page instead. */
+function loadCache(key) {
+  try { const v = JSON.parse(localStorage.getItem(key) || 'null'); if (v && Array.isArray(v.segs)) return v; } catch (e) { /* no saved progress */ }
+  return { segs: [], doneUpTo: 0 };
+}
+function saveCache(key, segs, doneUpTo) {
+  try { localStorage.setItem(key, JSON.stringify({ segs, doneUpTo })); } catch (e) { /* storage full or blocked */ }
+}
+
+// Self-contained: it is also copied into the worker, so it may only use its own arguments and browser globals.
+async function transcribeWindows(audio, asr, from, onWindow) {
+  const SR = 16000, W = 30 * SR, total = audio.length;
+  for (let s = from; s < total; s += W) {
+    const piece = audio.subarray(s, Math.min(s + W, total));
+    const off = s / SR, segs = [];
+    if (piece.length >= SR) {
+      let sum = 0, n = 0;
+      for (let i = 0; i < piece.length; i += 8) { sum += piece[i] * piece[i]; n++; }
+      if (Math.sqrt(sum / n) > 0.004) { // skip silent windows
+        const res = await asr(piece, { return_timestamps: true });
+        const list = res.chunks && res.chunks.length ? res.chunks : [{ text: res.text, timestamp: [0, piece.length / SR] }];
+        for (const c of list) {
+          const text = (c.text || '').trim();
+          if (text.length < 2 || /^[\[(].*[\])]$/.test(text)) continue;
+          const a = (c.timestamp && c.timestamp[0]) || 0;
+          let b = c.timestamp && c.timestamp[1];
+          if (b == null || b <= a) b = Math.min(a + 5, piece.length / SR);
+          segs.push({ start: off + a, end: off + b, text });
+        }
+      }
+    }
+    onWindow(Math.min(s + W, total) / SR, total / SR, segs);
+    await new Promise((r) => setTimeout(r, 0));
+  }
+}
+// Self-contained: runs inside the background worker.
+function asrWorkerMain() {
+  let asr = null;
+  self.postMessage({ t: 'hello' });
+  self.onmessage = async (e) => {
+    const m = e.data;
+    try {
+      if (m.t === 'init') {
+        let tf = null, local = false;
+        if (m.localLib) { try { tf = await import(m.localLib); local = true; } catch (err) { tf = null; } }
+        if (!tf) tf = await import(m.cdnLib);
+        const env = tf.env;
+        env.allowLocalModels = !!m.localLib; env.allowRemoteModels = true; env.localModelPath = m.modelPath;
+        if (local && m.wasmPaths) env.backends.onnx.wasm.wasmPaths = m.wasmPaths;
+        try { env.backends.onnx.wasm.numThreads = 1; } catch (err) { /* default */ }
+        const files = {};
+        asr = await tf.pipeline('automatic-speech-recognition', m.model, {
+          device: 'wasm',
+          progress_callback: (p) => {
+            if (p.status === 'progress' && p.file) {
+              files[p.file] = { loaded: p.loaded, total: p.total };
+              let l = 0, t = 0; for (const k in files) { l += files[k].loaded; t += files[k].total; }
+              if (t) self.postMessage({ t: 'dl', frac: l / t });
+            }
+          }
+        });
+        self.postMessage({ t: 'ready' });
+      } else if (m.t === 'run') {
+        await transcribeWindows(m.audio, asr, m.from, (done, total, segs) => self.postMessage({ t: 'win', done, total, segs }));
+        self.postMessage({ t: 'done' });
+      }
+    } catch (err) { self.postMessage({ t: 'error', message: String(err && err.message ? err.message : err) }); }
+  };
+}
+const ASR_WORKER_SRC = () => transcribeWindows.toString() + '\n(' + asrWorkerMain.toString() + ')();';
+
+const SR_ = 16000, WIN_ = 30 * SR_;
+function libUrls() {
+  const isHttp = location.protocol.startsWith('http');
+  return {
+    isHttp,
+    localLib: isHttp ? new URL('./vendor/transformers.min.js', location.href).href : '',
+    cdnLib: 'https://cdn.jsdelivr.net/npm/@huggingface/transformers@3.5.1',
+    modelPath: new URL('./models/', location.href).href,
+    wasmPaths: new URL('./vendor/', location.href).href
+  };
+}
+function listeningText(done, total, startSec, startMs) {
+  const rate = (done - startSec) / Math.max((performance.now() - startMs) / 1000, 1);
+  return 'Listening to the video… ' + fmt(done) + ' of ' + fmt(total) + ' · about ' + fmt((total - done) / Math.max(rate, 0.01)) + ' left';
+}
+
+function transcribeInWorker(audio, modelId, key, cache) {
+  return new Promise((resolve, reject) => {
+    const noWorker = (why) => Object.assign(new Error(why), { fallback: true });
+    let w;
+    try { w = new Worker(URL.createObjectURL(new Blob([ASR_WORKER_SRC()], { type: 'text/javascript' }))); }
+    catch (e) { reject(noWorker('worker not allowed')); return; }
+    const total = audio.length;
+    const from = Math.floor((cache.doneUpTo * SR_) / WIN_) * WIN_;
+    const urls = libUrls();
+    let hello = false, running = false, startMs = 0;
+    const startSec = from / SR_;
+    const helloTimer = setTimeout(() => { if (!hello) { w.terminate(); reject(noWorker('worker did not start')); } }, 5000);
+    w.onerror = (ev) => { clearTimeout(helloTimer); w.terminate(); reject(running ? new Error('The speech worker stopped: ' + (ev.message || 'unknown error')) : noWorker('worker error')); };
+    w.onmessage = (e) => {
+      const m = e.data;
+      if (m.t === 'hello') {
+        hello = true; clearTimeout(helloTimer);
+        w.postMessage({ t: 'init', model: modelId, localLib: urls.localLib, cdnLib: urls.cdnLib, modelPath: urls.modelPath, wasmPaths: urls.wasmPaths });
+      } else if (m.t === 'dl') {
+        setStage('Downloading speech model (first time only) ' + Math.round(m.frac * 100) + '%', 2 + m.frac * 8);
+      } else if (m.t === 'ready') {
+        running = true; startMs = performance.now();
+        setStage('Listening to the video…', 10);
+        w.postMessage({ t: 'run', audio, from }, [audio.buffer]);
+      } else if (m.t === 'win') {
+        for (const s of m.segs) cache.segs.push(s);
+        cache.doneUpTo = m.done; saveCache(key, cache.segs, m.done);
+        setStage(listeningText(m.done, m.total, startSec, startMs), 10 + (m.done / m.total) * 85);
+      } else if (m.t === 'done') {
+        w.terminate(); resolve(cache.segs);
+      } else if (m.t === 'error') {
+        w.terminate();
+        reject(running ? new Error(m.message) : Object.assign(noWorker(m.message), { detail: m.message }));
+      }
+    };
+  });
+}
+
+async function transcribeOnMain(audio, modelId, key, cache) {
+  setStage('Loading speech model…', 2);
+  const urls = libUrls();
+  let tf = null, local = false;
+  if (urls.isHttp) { try { tf = await import(urls.localLib); local = true; } catch (e) { tf = null; } }
+  if (!tf) tf = await import(urls.cdnLib);
+  const { pipeline, env } = tf;
+  env.allowLocalModels = urls.isHttp; env.allowRemoteModels = true; env.localModelPath = urls.modelPath;
+  if (local) env.backends.onnx.wasm.wasmPaths = urls.wasmPaths;
+  try { env.backends.onnx.wasm.numThreads = 1; } catch (e) { /* default */ }
+  const files = {};
+  const progress_callback = (p) => {
+    if (p.status === 'progress' && p.file) {
+      files[p.file] = { loaded: p.loaded, total: p.total };
+      let l = 0, t = 0; for (const k in files) { l += files[k].loaded; t += files[k].total; }
+      if (t) setStage('Downloading speech model (first time only) ' + Math.round(l / t * 100) + '%', 2 + (l / t) * 8);
+    }
+  };
+  let asr;
+  try { asr = await pipeline('automatic-speech-recognition', modelId, { device: 'wasm', progress_callback }); }
+  catch (e) { throw new Error('The speech engine could not start. Check your internet and try again.\n(' + (e && e.message ? e.message : e) + ')'); }
+  const from = Math.floor((cache.doneUpTo * SR_) / WIN_) * WIN_, startSec = from / SR_, startMs = performance.now();
+  await transcribeWindows(audio, asr, from, (done, total, segs) => {
+    for (const s of segs) cache.segs.push(s);
+    cache.doneUpTo = done; saveCache(key, cache.segs, done);
+    setStage(listeningText(done, total, startSec, startMs), 10 + (done / total) * 85);
+  });
+  return cache.segs;
+}
+
+async function transcribe(audio, modelId, key) {
+  const cache = loadCache(key);
+  if (cache.doneUpTo * SR_ >= audio.length - 1) return cache.segs; // finished earlier
+  setStage('Loading speech model…', 2);
+  try { return await transcribeInWorker(audio, modelId, key, cache); }
+  catch (e) {
+    if (!e || !e.fallback) throw e;
+    console.warn('Background worker not available, running on the page instead.', e);
+    return transcribeOnMain(audio, modelId, key, cache);
+  }
+}
+
+/* ---------- picking the key moments ---------- */
+const STOP = new Set(('the and for are but not you all any can had her was one our out has have this that with from they will would there their what about which when your said them than then into some could other these also been were just like very more over such only even most make made much those because while where does did how its his she him who why get got going gonna want really thing things yeah okay well kind lot know think see say way use used using been being both each few many may might must should too own same here our out off yes').split(/\s+/));
+const CUES = /\b(most important|key (point|thing|idea)|the secret|the reason|here'?s (why|how|the)|mistake|remember|number (one|1|two|2|three|3)|biggest|the truth|let me (tell|show|explain)|for example|to sum up|in summary|the problem|the solution|lesson|how to|never|always)\b/gi;
+const toks = (s) => (s.toLowerCase().match(/[a-z']+/g) || []).filter((w) => w.length > 2 && !STOP.has(w));
+const endsSentence = (s) => /[.!?]["')\]]?$/.test(s.trim());
+
+function pickClips(segs, L, N) {
+  if (!segs.length) return [];
+  const df = new Map(), buckets = new Map();
+  for (const s of segs) {
+    const b = Math.floor(s.start / 30);
+    if (!buckets.has(b)) buckets.set(b, new Set());
+    toks(s.text).forEach((w) => buckets.get(b).add(w));
+  }
+  buckets.forEach((set) => set.forEach((w) => df.set(w, (df.get(w) || 0) + 1)));
+  const nb = buckets.size;
+  const idf = (w) => Math.log(nb / (1 + (df.get(w) || 0))) + 1;
+
+  const cands = [];
+  for (let i = 0; i < segs.length; i++) {
+    if (i > 0 && !endsSentence(segs[i - 1].text)) continue;
+    const st = segs[i].start;
+    let j = i;
+    while (j < segs.length - 1 && segs[j].end - st < L - 5) j++;
+    while (j < segs.length - 1 && !endsSentence(segs[j].text) && segs[j].end - st < L + 15) j++;
+    const dur = segs[j].end - st;
+    if (dur < L * 0.6) continue;
+    const tf = new Map(); let text = '';
+    for (let k = i; k <= j; k++) { text += segs[k].text + ' '; toks(segs[k].text).forEach((w) => tf.set(w, (tf.get(w) || 0) + 1)); }
+    let sc = 0; const ranked = [];
+    tf.forEach((c, w) => { const v = Math.sqrt(c) * idf(w); sc += v; ranked.push([w, v]); });
+    sc /= Math.sqrt(dur);
+    const cues = (text.match(CUES) || []).length;
+    sc += Math.min(cues, 4) * 2;
+    sc += (text.split(/\s+/).length / dur) * 1.5;
+    ranked.sort((a, b) => b[1] - a[1]);
+    cands.push({ start: st, end: segs[j].end, score: sc, text: text.trim(), words: ranked.slice(0, 3).map((r) => r[0]), i, j });
+  }
+  cands.sort((a, b) => b.score - a.score);
+  const chosen = [];
+  for (const c of cands) {
+    if (chosen.length >= N) break;
+    if (chosen.every((p) => c.end + 10 < p.start || c.start > p.end + 10)) chosen.push(c);
+  }
+  chosen.sort((a, b) => a.start - b.start);
+  return chosen.map((c, n) => ({
+    n: n + 1, start: c.start, end: c.end, text: c.text,
+    title: c.words.map((w) => w[0].toUpperCase() + w.slice(1)).join(' · ') || 'Clip ' + (n + 1),
+    i: c.i, j: c.j
+  }));
+}
+
+/* ---------- page 2: one slot per clip ---------- */
+function buildSlots(n) {
+  const list = $('slots'); list.replaceChildren(); state.slots = [];
+  for (let i = 0; i < n; i++) {
+    const el = document.createElement('div'); el.className = 'slot';
+    el.innerHTML = '<div class="n"></div><div><h3></h3><div class="tc"></div><div class="bar"><i></i></div>' +
+      '<div class="srow"><span class="pct">0%</span><span class="sstat">Waiting</span></div><div class="row acts" hidden></div></div>';
+    el.querySelector('.n').textContent = String(i + 1).padStart(2, '0');
+    el.querySelector('h3').textContent = 'Clip ' + (i + 1);
+    el.querySelector('.tc').textContent = 'Waiting for the key moments…';
+    const slot = { el, h: el.querySelector('h3'), tc: el.querySelector('.tc'), bar: el.querySelector('.bar > i'), pct: el.querySelector('.pct'), stat: el.querySelector('.sstat'), acts: el.querySelector('.acts'), lastP: -1, url: null };
+    state.slots.push(slot); list.appendChild(el);
+  }
+}
+function trimSlots(n) { while (state.slots.length > n) { state.slots.pop().el.remove(); } }
+function fillSlot(slot, c) {
+  slot.h.textContent = c.title;
+  slot.tc.textContent = fmt(c.start) + ' – ' + fmt(c.end) + ' · ' + Math.round(c.end - c.start) + ' s';
+}
+function setSlotP(slot, p, text) {
+  p = Math.max(0, Math.min(100, Math.round(p)));
+  if (p !== slot.lastP) { slot.lastP = p; slot.bar.style.width = p + '%'; slot.pct.textContent = p + '%'; }
+  if (text) slot.stat.textContent = text;
+}
+function finishSlot(slot, url, ext, n) {
+  if (slot.url) URL.revokeObjectURL(slot.url);
+  slot.url = url; slot.el.classList.remove('failed'); slot.el.classList.add('done');
+  setSlotP(slot, 100, 'Ready');
+  slot.acts.replaceChildren();
+  const pv = document.createElement('button'); pv.className = 'ghost'; pv.textContent = 'Preview';
+  pv.addEventListener('click', () => {
+    const v = $('pv'); v.src = url; v.hidden = false;
+    const p = v.play(); if (p && p.catch) p.catch(() => {});
+    v.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  });
+  const a = document.createElement('a'); a.href = url; a.download = 'clip-' + n + '.' + ext; a.textContent = 'Download clip ' + n;
+  slot.acts.append(pv, a); slot.acts.hidden = false;
+}
+function failSlot(slot, e, onRetry, label) {
+  slot.el.classList.add('failed');
+  slot.stat.textContent = label || 'Failed';
+  slot.acts.replaceChildren();
+  const msg = document.createElement('div'); msg.className = 'msg'; msg.textContent = (e && e.message) ? e.message : String(e);
+  const b = document.createElement('button'); b.className = 'ghost'; b.textContent = 'Try again';
+  b.addEventListener('click', onRetry);
+  slot.acts.append(msg, b); slot.acts.hidden = false;
+}
+function showView(name) {
+  $('viewSetup').hidden = name !== 'setup';
+  $('viewWork').hidden = name !== 'work';
+  window.scrollTo(0, 0);
+  if (name === 'work') game.start(); else game.stop();
+}
+function summary() {
+  const total = state.slots.length, ok = state.slots.filter((s) => s.el.classList.contains('done')).length;
+  $('stepLabel').textContent = 'Done';
+  setStage(ok === total ? 'All ' + ok + ' clips are ready. Tap Download on each one.' : ok + ' of ' + total + ' clips are ready. Tap Try again on the others.', 100);
+  $('back').hidden = false;
+}
+
+/* ---------- cutting a clip (records video + audio + captions) ---------- */
+function disposeRenderer() {
+  if (rv) { try { rv.pause(); } catch (e) { /* ok */ } rv.removeAttribute('src'); try { rv.load(); } catch (e) { /* ok */ } rv.remove(); rv = null; }
+  if (rvUrl) { URL.revokeObjectURL(rvUrl); rvUrl = null; }
+  if (actx) { actx.close().catch(() => {}); actx = null; adest = null; }
+}
+const mediaErrText = (er) => {
+  const names = { 1: 'loading was cancelled', 2: 'the file could not be read', 3: 'the picture could not be decoded', 4: 'this video format is not supported' };
+  return er ? (names[er.code] || 'error ' + er.code) + (er.message ? ' — ' + er.message : '') : 'no response';
+};
+async function openRenderer() {
+  if (rv && rv.readyState >= 1) return;
+  let why = '';
+  for (let attempt = 0; attempt < 2; attempt++) {
+    disposeRenderer();
+    const v = document.createElement('video');
+    v.className = 'hidvid'; v.playsInline = true; v.setAttribute('playsinline', ''); v.preload = 'auto';
+    document.body.appendChild(v);
+    rvUrl = URL.createObjectURL(state.file);
+    v.src = rvUrl; v.load();
+    const res = await new Promise((resolve) => {
+      const done = (r) => { clearTimeout(tm); v.removeEventListener('loadedmetadata', ok); v.removeEventListener('error', bad); resolve(r); };
+      const ok = () => done('ok'), bad = () => done('error');
+      const tm = setTimeout(() => done('timeout'), 45000);
+      v.addEventListener('loadedmetadata', ok); v.addEventListener('error', bad);
+      if (v.readyState >= 1) ok();
+    });
+    if (res === 'ok') {
+      rv = v;
+      try {
+        actx = new (window.AudioContext || window.webkitAudioContext)();
+        const src = actx.createMediaElementSource(rv);
+        adest = actx.createMediaStreamDestination();
+        src.connect(adest);
+      } catch (e) { console.warn('No sound capture', e); adest = null; }
+      return;
+    }
+    why = res === 'error' ? mediaErrText(v.error) : 'it took too long to open';
+    v.remove();
+  }
+  disposeRenderer();
+  throw Object.assign(new Error('The video could not be opened (' + why + '). Close other tabs and apps, keep this tab open, then tap Try again.'), { fatal: true });
+}
+function capPieces(c) {
+  const out = [];
+  for (let k = c.i; k <= c.j; k++) {
+    const s = state.segs[k], w = s.text.split(/\s+/), n = Math.ceil(w.length / 5), d = s.end - s.start;
+    for (let q = 0; q < n; q++) out.push({ s: s.start + d * q / n, e: s.start + d * (q + 1) / n, t: w.slice(q * 5, q * 5 + 5).join(' ') });
+  }
+  return out;
+}
+function wrapText(ctx, text, maxW) {
+  const lines = []; let line = '';
+  for (const w of text.split(' ')) {
+    const t = line ? line + ' ' + w : w;
+    if (ctx.measureText(t).width > maxW && line) { lines.push(line); line = w; } else line = t;
+  }
+  if (line) lines.push(line);
+  return lines;
+}
+async function makeClip(c, slot) {
+  setSlotP(slot, 0, 'Opening the video…');
+  await openRenderer();
+  const vw = rv.videoWidth, vh = rv.videoHeight, vertical = $('fmt').value === 'vertical';
+  if (!vw || !vh) throw new Error('This file has sound but no picture, so a video clip cannot be made.');
+  let W, H;
+  if (vertical) { W = 720; H = 1280; }
+  else { W = Math.min(1280, vw); H = Math.round(W * vh / vw); W -= W % 2; H -= H % 2; }
+  const cv = $('stage'); cv.width = W; cv.height = H;
+  const g = cv.getContext('2d');
+  const pieces = $('caps').checked ? capPieces(c) : [];
+  const fs = Math.round(W * (vertical ? 0.062 : 0.04));
+  const draw = () => {
+    g.fillStyle = '#000'; g.fillRect(0, 0, W, H);
+    if (vertical) { const sc = Math.max(W / vw, H / vh), dw = vw * sc, dh = vh * sc; g.drawImage(rv, (W - dw) / 2, (H - dh) / 2, dw, dh); }
+    else g.drawImage(rv, 0, 0, W, H);
+    const t = rv.currentTime, p = pieces.find((x) => t >= x.s && t < x.e);
+    if (p) {
+      g.font = '700 ' + fs + 'px Inter, Arial, sans-serif'; g.textAlign = 'center'; g.textBaseline = 'middle';
+      const lines = wrapText(g, p.t, W * 0.86), lh = fs * 1.3;
+      const bw = Math.max(...lines.map((l) => g.measureText(l).width)) + fs, bh = lines.length * lh + fs * 0.5;
+      const bottom = H * (vertical ? 0.78 : 0.92), top = bottom - bh;
+      g.fillStyle = 'rgba(0,0,0,0.68)';
+      if (g.roundRect) { g.beginPath(); g.roundRect((W - bw) / 2, top, bw, bh, fs * 0.3); g.fill(); } else g.fillRect((W - bw) / 2, top, bw, bh);
+      g.fillStyle = '#fff';
+      lines.forEach((l, i) => g.fillText(l, W / 2, top + fs * 0.25 + lh * (i + 0.5)));
+    }
+  };
+  if (!window.MediaRecorder) throw new Error('This browser cannot record clips. Use Chrome.');
+  const mimes = ['video/mp4;codecs=avc1.42E01E,mp4a.40.2', 'video/webm;codecs=vp9,opus', 'video/webm'];
+  const mime = mimes.find((m) => MediaRecorder.isTypeSupported(m)) || '';
+  const ext = mime.startsWith('video/mp4') ? 'mp4' : 'webm';
+  const stream = cv.captureStream(30);
+  if (adest) adest.stream.getAudioTracks().forEach((tr) => stream.addTrack(tr));
+  const rec = new MediaRecorder(stream, mime ? { mimeType: mime, videoBitsPerSecond: 4000000 } : { videoBitsPerSecond: 4000000 });
+  const chunks = [];
+  rec.ondataavailable = (e) => e.data.size && chunks.push(e.data);
+  const stopped = new Promise((r) => (rec.onstop = r));
+
+  setSlotP(slot, 0, 'Jumping to the start…');
+  if (Math.abs(rv.currentTime - c.start) > 0.05) {
+    const seeked = once(rv, 'seeked');
+    rv.currentTime = c.start;
+    await Promise.race([seeked, timeout(30000, 'The video did not jump to the clip start. Try an MP4 (H.264) file.')]);
+  }
+  draw();
+  if (actx) await actx.resume();
+  rec.start(500);
+  try { await rv.play(); } catch (e) { rec.stop(); throw new Error('The browser did not allow playback. Tap the page once and try again.'); }
+  setSlotP(slot, 0, adest ? 'Recording…' : 'Recording (no sound)…');
+  let lastT = rv.currentTime, lastMove = Date.now();
+  await new Promise((resolve, reject) => {
+    const timer = setInterval(() => {
+      if (rv.currentTime >= c.end || rv.ended) { clearInterval(timer); resolve(); return; }
+      if (rv.currentTime !== lastT) { lastT = rv.currentTime; lastMove = Date.now(); }
+      else if (Date.now() - lastMove > 15000) { clearInterval(timer); reject(new Error('Playback stalled. Keep this tab visible and try again.')); return; }
+      draw();
+      setSlotP(slot, (rv.currentTime - c.start) / (c.end - c.start) * 100);
+    }, 33);
+  }).catch((e) => { rv.pause(); rec.stop(); throw e; });
+  rv.pause(); rec.stop(); await stopped;
+  const blob = new Blob(chunks, { type: ext === 'mp4' ? 'video/mp4' : 'video/webm' });
+  if (!blob.size) throw new Error('The recording came out empty.');
+  finishSlot(slot, URL.createObjectURL(blob), ext, c.n);
+}
+
+/* ---------- the whole job ---------- */
+async function runAll() {
+  if (!state.file || state.busy) return;
+  state.busy = true;
+  const N = +$('count').value, L = +$('len').value;
+  $('errTxt').hidden = true; $('back').hidden = true;
+  const pv = $('pv'); pv.pause(); pv.hidden = true; pv.removeAttribute('src');
+  buildSlots(N); showView('work'); startTimer(); keepAwake(true);
+  $('stepLabel').textContent = 'Step 1 of 2 · Finding the key moments';
+  setStage('Reading the sound of the video…', 1);
+  try {
+    let audio = await extractAudio(state.file);
+    const key = 'cc1:' + state.file.name + ':' + state.file.size + ':' + state.file.lastModified + ':' + $('model').value;
+    state.segs = await transcribe(audio, $('model').value, key);
+    audio = null;
+    if (!state.segs.length) throw new Error('No speech was found in this video.');
+    setStage('Choosing the key moments…', 96);
+    state.clips = pickClips(state.segs, L, N);
+    if (!state.clips.length) throw new Error('Could not find enough clear speech to cut clips from.');
+    trimSlots(state.clips.length);
+    state.clips.forEach((c, i) => fillSlot(state.slots[i], c));
+    $('stepLabel').textContent = 'Step 2 of 2 · Cutting the clips';
+    let fatal = null;
+    for (let i = 0; i < state.clips.length; i++) {
+      const slot = state.slots[i];
+      if (fatal) { failSlot(slot, fatal, () => retrySlot(i), 'Skipped'); continue; }
+      setStage('Cutting clip ' + (i + 1) + ' of ' + state.clips.length + '…', (i / state.clips.length) * 100);
+      try { await makeClip(state.clips[i], slot); }
+      catch (e) { console.error(e); failSlot(slot, e, () => retrySlot(i)); if (e && e.fatal) fatal = e; }
+    }
+    summary();
+  } catch (e) { $('stepLabel').textContent = 'Stopped'; showErr(e); }
+  finally { state.busy = false; stopTimer(); keepAwake(false); }
+}
+async function retrySlot(i) {
+  if (state.busy) return;
+  state.busy = true; keepAwake(true);
+  const slot = state.slots[i], c = state.clips[i];
+  slot.el.classList.remove('failed'); slot.acts.hidden = true; slot.lastP = -1; setSlotP(slot, 0, 'Starting again…');
+  $('stepLabel').textContent = 'Cutting clip ' + (i + 1);
+  disposeRenderer();
+  try { await makeClip(c, slot); }
+  catch (e) { console.error(e); failSlot(slot, e, () => retrySlot(i)); }
+  finally { state.busy = false; keepAwake(false); summary(); }
+}
+$('go').addEventListener('click', runAll);
+$('back').addEventListener('click', () => {
+  if (state.busy) return;
+  state.slots.forEach((s) => { if (s.url) URL.revokeObjectURL(s.url); });
+  const pv = $('pv'); pv.pause(); pv.hidden = true; pv.removeAttribute('src');
+  disposeRenderer();
+  showView('setup');
+});
+
+/* ---------- the game: tap to fly between the pillars ----------
+   It runs in its own background worker (drawn on an offscreen canvas), so nothing the page does can slow it down.
+   If the browser cannot do that, the same game code runs on the page instead. */
+/*GAME_START*/
+function gameMain(io) {
+  const cv = io.canvas, g = cv.getContext('2d');
+  const W = 360, H = 480, GROUND = 44, PW = 54, SPACING = 215, R = 13, X = 96, PER_LEVEL = 5, POWER_FROM = 10;
+  const NAMES = ['Sky Starter', 'Cloud Runner', 'Wind Rider', 'Storm Chaser', 'Sun Chaser', 'Star Pilot', 'Comet Rider', 'Galaxy Hawk', 'Cosmic Eagle', 'Sky Legend'];
+  const FONT = 'system-ui, -apple-system, "Segoe UI", Roboto, sans-serif';
+  const dpr = cv.width / W;
+  g.setTransform(dpr, 0, 0, dpr, 0, 0);
+  let col = { bg: '#202a33', fg: '#e8ecf0', muted: '#8b96a3', line: '#27313b', accent: '#ff7a3d', surface: '#161c23' };
+  let st = 'ready', y = 0, vy = 0, pipes = [], orbs = [], score = 0, best = 0, made = 0, running = false, raf = 0, last = 0, clock = 0, overAt = 0;
+  let shield = false, boost = 0, invuln = 0, toast = null, unlocked = {}, shown = '';
+  const levelOf = (s) => Math.floor(s / PER_LEVEL) + 1;
+  const gapNow = () => Math.max(122, 146 - (levelOf(score) - 1) * 3);
+  const speedNow = () => (2.3 + Math.min(levelOf(score) - 1, 6) * 0.12) * (boost > 0 ? 1.6 : 1);
+  const label = () => { const t = levelOf(score) + '|' + score + '|' + best; if (t !== shown) { shown = t; io.send({ t: 'score', score, best, level: levelOf(score) }); } };
+  function unlock(id, name) { if (unlocked[id]) return false; unlocked[id] = 1; io.send({ t: 'ach', id, name }); return true; }
+  function reset() { y = H / 2 - 30; vy = 0; pipes = []; orbs = []; score = 0; made = 0; shield = false; boost = 0; invuln = 0; toast = null; st = 'ready'; label(); }
+  function addPipe(x) {
+    const gp = gapNow(), top = 56 + Math.random() * (H - GROUND - gp - 112);
+    pipes.push({ x, top, gap: gp, passed: false }); made++;
+    if (made >= POWER_FROM + 2 && Math.random() < 0.55) orbs.push({ x: x + PW / 2, y: top + gp / 2, kind: Math.random() < 0.5 ? 'shield' : 'boost' });
+  }
+  function flap() {
+    if (st === 'over') { if (performance.now() - overAt > 450) reset(); return; }
+    if (st === 'ready') { st = 'play'; addPipe(W + 40); }
+    vy = -6.3;
+  }
+  function addScore(n) {
+    const before = levelOf(score);
+    score += n;
+    if (score > best) { best = score; io.send({ t: 'best', v: best }); }
+    if (score >= 1) unlock('first', 'First flight');
+    const after = levelOf(score);
+    if (after > before) {
+      const name = NAMES[Math.min(after - 2, NAMES.length - 1)], fresh = unlock('lv' + after, name);
+      toast = { text: 'Level ' + after, sub: (fresh ? 'Achievement unlocked: ' : '') + name + (after === 3 ? ' · power-ups on!' : ''), t: 170 };
+    }
+    label();
+  }
+  function hit(p) {
+    const box = (rx, ry, rw, rh) => { const cx = Math.max(rx, Math.min(X, rx + rw)), cy = Math.max(ry, Math.min(y, ry + rh)); const dx = X - cx, dy = y - cy; return dx * dx + dy * dy < R * R; };
+    return box(p.x, 0, PW, p.top) || box(p.x, p.top + p.gap, PW, H - GROUND - (p.top + p.gap));
+  }
+  function update(dt) {
+    clock += dt;
+    if (invuln > 0) invuln -= dt;
+    if (boost > 0) boost -= dt;
+    if (toast) { toast.t -= dt; if (toast.t <= 0) toast = null; }
+    if (st === 'ready') { y = H / 2 - 30 + Math.sin(clock / 14) * 7; return; }
+    if (st !== 'play') return;
+    vy = Math.min(vy + 0.36 * dt, 9); y += vy * dt;
+    const sp = speedNow() * dt;
+    for (const p of pipes) p.x -= sp;
+    for (const o of orbs) o.x -= sp;
+    if (pipes.length && pipes[0].x < -PW - 6) pipes.shift();
+    orbs = orbs.filter((o) => o.x > -30);
+    if (!pipes.length || pipes[pipes.length - 1].x < W - SPACING) addPipe(W + 10);
+    for (const p of pipes) if (!p.passed && p.x + PW < X - R) { p.passed = true; addScore(boost > 0 ? 2 : 1); }
+    for (let i = orbs.length - 1; i >= 0; i--) {
+      const o = orbs[i], dx = o.x - X, dy = o.y - y;
+      if (dx * dx + dy * dy < (R + 12) * (R + 12)) {
+        orbs.splice(i, 1);
+        if (o.kind === 'shield') { shield = true; toast = { text: 'Shield!', sub: 'You can survive one crash', t: 110 }; }
+        else { boost = 240; toast = { text: 'Boost!', sub: 'Faster, safe and double points', t: 110 }; }
+        unlock('power', 'Power collector');
+      }
+    }
+    if (y - R < 0) { y = R; vy = 0; }
+    if (boost > 0 || invuln > 0) { if (y + R > H - GROUND) { y = H - GROUND - R; vy = -6; } return; }
+    const grounded = y + R > H - GROUND, hp = pipes.find(hit);
+    if (grounded || hp) {
+      if (shield) {
+        shield = false; invuln = 80;
+        if (hp) { y = hp.top + hp.gap / 2; vy = 0; } else { y = H - GROUND - R - 2; vy = -7; }
+        toast = { text: 'Shield used', sub: 'Saved you!', t: 80 };
+      } else { st = 'over'; overAt = performance.now(); label(); }
+    }
+  }
+  function roundBox(x, ry, w, h, r) { if (g.roundRect) { g.beginPath(); g.roundRect(x, ry, w, h, r); g.fill(); } else g.fillRect(x, ry, w, h); }
+  function banner(t1, t2, by) {
+    g.fillStyle = col.surface; g.globalAlpha = 0.93;
+    const bw = 264, bh = t2 ? 84 : 56, bx = (W - bw) / 2;
+    roundBox(bx, by, bw, bh, 10);
+    g.globalAlpha = 1; g.fillStyle = col.fg; g.textAlign = 'center'; g.textBaseline = 'middle';
+    g.font = '700 22px ' + FONT; g.fillText(t1, W / 2, by + (t2 ? 28 : bh / 2));
+    if (t2) { g.font = '500 13px ' + FONT; g.fillStyle = col.muted; g.fillText(t2, W / 2, by + 58); }
+  }
+  function drawOrb(o) {
+    const pulse = 1 + Math.sin(clock / 6) * 0.08;
+    g.save(); g.translate(o.x, o.y); g.scale(pulse, pulse);
+    g.fillStyle = col.surface; g.beginPath(); g.arc(0, 0, 12, 0, 7); g.fill();
+    g.lineWidth = 3; g.strokeStyle = col.accent; g.beginPath(); g.arc(0, 0, 12, 0, 7); g.stroke();
+    g.fillStyle = col.accent; g.beginPath();
+    if (o.kind === 'shield') { g.moveTo(-5, -6); g.lineTo(5, -6); g.lineTo(5, 1); g.quadraticCurveTo(5, 6, 0, 8); g.quadraticCurveTo(-5, 6, -5, 1); }
+    else { g.moveTo(2, -8); g.lineTo(-5, 1); g.lineTo(-1, 1); g.lineTo(-2, 8); g.lineTo(5, -2); g.lineTo(1, -2); }
+    g.closePath(); g.fill(); g.restore();
+  }
+  function draw() {
+    g.fillStyle = col.bg; g.fillRect(0, 0, W, H);
+    g.fillStyle = col.line; g.globalAlpha = 0.6;
+    for (const c of [[70, 90, 34], [250, 60, 26], [300, 210, 30], [30, 260, 22]]) { g.beginPath(); g.ellipse(c[0] - (clock * 0.15) % 40, c[1], c[2], c[2] * 0.45, 0, 0, 7); g.fill(); }
+    g.globalAlpha = 1;
+    for (const p of pipes) {
+      g.fillStyle = col.muted;
+      g.fillRect(p.x, 0, PW, p.top); g.fillRect(p.x - 4, p.top - 16, PW + 8, 16);
+      const by = p.top + p.gap; g.fillRect(p.x, by, PW, H - GROUND - by); g.fillRect(p.x - 4, by, PW + 8, 16);
+    }
+    for (const o of orbs) drawOrb(o);
+    g.fillStyle = col.line; g.fillRect(0, H - GROUND, W, GROUND);
+    g.fillStyle = col.muted; g.fillRect(0, H - GROUND, W, 3);
+    if (boost > 0) { g.strokeStyle = col.accent; g.lineWidth = 3; g.globalAlpha = 0.6; for (let i = 0; i < 3; i++) { g.beginPath(); g.moveTo(X - 18 - i * 10, y - 8 + i * 8); g.lineTo(X - 44 - i * 14, y - 8 + i * 8); g.stroke(); } g.globalAlpha = 1; }
+    g.save(); g.translate(X, y); g.rotate(Math.max(-0.45, Math.min(1.0, vy * 0.07)));
+    if (invuln > 0 && Math.floor(clock / 4) % 2 === 0) g.globalAlpha = 0.45;
+    g.fillStyle = col.accent; g.beginPath(); g.arc(0, 0, R, 0, 7); g.fill();
+    g.fillStyle = col.surface; g.beginPath(); g.ellipse(-3, 3, 7, 5, -0.4, 0, 7); g.fill();
+    g.fillStyle = col.fg; g.beginPath(); g.moveTo(R - 1, -2); g.lineTo(R + 9, 2); g.lineTo(R - 1, 6); g.closePath(); g.fill();
+    g.fillStyle = '#fff'; g.beginPath(); g.arc(5, -4, 3.6, 0, 7); g.fill();
+    g.fillStyle = '#10151c'; g.beginPath(); g.arc(6, -4, 1.7, 0, 7); g.fill();
+    g.globalAlpha = 1;
+    if (shield) { g.strokeStyle = col.accent; g.lineWidth = 3; g.globalAlpha = 0.55 + Math.sin(clock / 5) * 0.25; g.beginPath(); g.arc(0, 0, R + 7, 0, 7); g.stroke(); g.globalAlpha = 1; }
+    g.restore();
+    g.fillStyle = col.fg; g.globalAlpha = 0.85; g.textAlign = 'center'; g.textBaseline = 'middle';
+    g.font = '700 44px ' + FONT; g.fillText(String(score), W / 2, 44); g.globalAlpha = 1;
+    g.textAlign = 'left'; g.font = '700 13px ' + FONT; g.fillStyle = col.muted;
+    g.fillText('LEVEL ' + levelOf(score), 12, 18);
+    if (boost > 0) { g.fillStyle = col.accent; g.fillText('BOOST ' + Math.ceil(boost / 60) + 's', 12, 36); }
+    else if (shield) { g.fillStyle = col.accent; g.fillText('SHIELD READY', 12, 36); }
+    if (st === 'ready') banner('Tap to fly', 'Stay between the pillars', 84);
+    if (st === 'over') banner('Game over', 'Score ' + score + ' · tap to play again', 84);
+    if (toast && st === 'play') { g.globalAlpha = Math.min(1, toast.t / 30); banner(toast.text, toast.sub, 84); g.globalAlpha = 1; }
+  }
+  function loop(now) {
+    if (!running) return;
+    raf = io.raf(loop);
+    if (now - last < (io.minFrame || 15)) return;
+    const dt = Math.min((now - last) / 16.667, 3); last = now;
+    update(dt); draw();
+  }
+  function start() { if (running) return; running = true; reset(); last = performance.now(); raf = io.raf(loop); }
+  function stop() { running = false; io.caf(raf); }
+  io.onMessage((m) => {
+    if (m.t === 'init') { best = m.best || 0; unlocked = m.unlocked || {}; if (m.col) col = m.col; shown = ''; label(); }
+    else if (m.t === 'colors') col = m.col;
+    else if (m.t === 'start') start();
+    else if (m.t === 'stop') stop();
+    else if (m.t === 'tap') flap();
+  });
+  return { dbg: () => ({ y, vy, pipes, orbs, score, st, shield, boost, invuln, level: levelOf(score), best }), flap, update, draw };
+}
+/*GAME_END*/
+
+const GAME_WORKER_SRC = () => 'const gameMain = ' + gameMain.toString() + ';\n' +
+  'let ioFn = null;\n' +
+  'self.onmessage = function (e) {\n' +
+  '  const m = e.data;\n' +
+  '  if (m.t === "canvas") {\n' +
+  '    gameMain({ canvas: m.canvas, minFrame: m.minFrame, send: function (x) { self.postMessage(x); }, onMessage: function (fn) { ioFn = fn; },\n' +
+  '      raf: function (f) { return self.requestAnimationFrame ? self.requestAnimationFrame(f) : setTimeout(function () { f(performance.now()); }, 16); },\n' +
+  '      caf: function (id) { if (self.cancelAnimationFrame) self.cancelAnimationFrame(id); else clearTimeout(id); } });\n' +
+  '    self.postMessage({ t: "ready" });\n' +
+  '  } else if (ioFn) { ioFn(m); }\n' +
+  '};';
+
+const game = (() => {
+  const W = 360, H = 480;
+  const BADGES = [['first', 'First flight'], ['lv2', 'Sky Starter'], ['lv3', 'Cloud Runner'], ['lv4', 'Wind Rider'], ['lv5', 'Storm Chaser'], ['power', 'Power collector']];
+  let canvas = $('game'), post = () => {}, wantRun = false, initPromise = null, best = 0, unlocked = {};
+  try { best = +localStorage.getItem('cc-best') || 0; unlocked = JSON.parse(localStorage.getItem('cc-ach') || '{}') || {}; } catch (e) { /* no storage */ }
+  const css = (n, d) => getComputedStyle(document.documentElement).getPropertyValue(n).trim() || d;
+  const colors = () => ({ bg: css('--track', '#dfe4e9'), fg: css('--fg', '#10151c'), muted: css('--muted', '#5b6672'), line: css('--line', '#d3d9df'), accent: css('--accent', '#d9480f'), surface: css('--surface', '#fff') });
+  function renderBadges() {
+    const box = $('badges'); box.replaceChildren();
+    for (const [id, name] of BADGES) { const s = document.createElement('span'); s.className = 'badge' + (unlocked[id] ? ' on' : ''); s.textContent = name; box.appendChild(s); }
+  }
+  function onMsg(m) {
+    if (m.t === 'score') $('gameScore').textContent = 'Level ' + m.level + ' · Score ' + m.score + ' · Best ' + m.best;
+    else if (m.t === 'best') { best = m.v; try { localStorage.setItem('cc-best', String(best)); } catch (e) { /* ok */ } }
+    else if (m.t === 'ach') { unlocked[m.id] = 1; try { localStorage.setItem('cc-ach', JSON.stringify(unlocked)); } catch (e) { /* ok */ } renderBadges(); }
+  }
+  const sizeCanvas = (cv) => { const dpr = Math.min(window.devicePixelRatio || 1, 2); cv.width = Math.round(W * dpr); cv.height = Math.round(H * dpr); };
+  const bindInput = (cv) => cv.addEventListener('pointerdown', (e) => { e.preventDefault(); post({ t: 'tap' }); });
+  function freshCanvas() {
+    const old = canvas, fresh = document.createElement('canvas');
+    fresh.id = 'game'; fresh.tabIndex = 0; fresh.setAttribute('aria-label', old.getAttribute('aria-label') || 'Game');
+    old.replaceWith(fresh); canvas = fresh; sizeCanvas(fresh); return fresh;
+  }
+  function startOnPage(cv) {
+    const listeners = [];
+    gameMain({ canvas: cv, minFrame: 32, send: onMsg, onMessage: (fn) => listeners.push(fn), raf: (f) => requestAnimationFrame(f), caf: (id) => cancelAnimationFrame(id) });
+    post = (m) => listeners.forEach((fn) => fn(m));
+    bindInput(cv);
+  }
+  async function init() {
+    renderBadges();
+    sizeCanvas(canvas);
+    if (window.OffscreenCanvas && canvas.transferControlToOffscreen && window.Worker) {
+      let w = null;
+      try {
+        w = new Worker(URL.createObjectURL(new Blob([GAME_WORKER_SRC()], { type: 'text/javascript' })));
+        const off = canvas.transferControlToOffscreen();
+        const ok = await new Promise((resolve) => {
+          const tm = setTimeout(() => resolve(false), 3000);
+          w.onerror = () => { clearTimeout(tm); resolve(false); };
+          w.onmessage = (e) => { if (e.data.t === 'ready') { clearTimeout(tm); resolve(true); } else onMsg(e.data); };
+          w.postMessage({ t: 'canvas', canvas: off, minFrame: 15 }, [off]);
+        });
+        if (ok) { w.onmessage = (e) => onMsg(e.data); post = (m) => w.postMessage(m); bindInput(canvas); return; }
+      } catch (e) { console.warn('Game worker failed', e); }
+      if (w) w.terminate();
+      startOnPage(freshCanvas()); // the first canvas can no longer be drawn on, so use a new one
+      return;
+    }
+    startOnPage(canvas);
+  }
+  document.addEventListener('keydown', (e) => {
+    if (!wantRun || (e.code !== 'Space' && e.code !== 'ArrowUp')) return;
+    const t = e.target && e.target.tagName;
+    if (t === 'SELECT' || t === 'INPUT' || t === 'BUTTON' || t === 'A') return;
+    e.preventDefault(); post({ t: 'tap' });
+  });
+  try { window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => post({ t: 'colors', col: colors() })); } catch (e) { /* ok */ }
+  return {
+    start() {
+      wantRun = true;
+      if (!initPromise) initPromise = init().then(() => post({ t: 'init', best, unlocked, col: colors() }));
+      initPromise.then(() => { if (wantRun) { post({ t: 'colors', col: colors() }); post({ t: 'start' }); } });
+    },
+    stop() { wantRun = false; post({ t: 'stop' }); }
+  };
+})();
+</script>
+</body>
+</html>
